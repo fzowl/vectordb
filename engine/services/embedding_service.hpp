@@ -49,13 +49,14 @@ class ContextualizedEmbeddingRequestBody: public oatpp::DTO {
   DTO_FIELD(String, output_dtype);
 };
 
-class MultimodalEmbeddingRequestBody: public oatpp::DTO {
+class VoyageAIEmbeddingRequestBody: public oatpp::DTO {
 
-  DTO_INIT(MultimodalEmbeddingRequestBody, DTO)
+  DTO_INIT(VoyageAIEmbeddingRequestBody, DTO)
 
   DTO_FIELD(String, model);
-  DTO_FIELD(List<List<String>>, inputs);
+  DTO_FIELD(List<String>, input);
   DTO_FIELD(String, input_type);
+  DTO_FIELD(Int32, output_dimension);
   DTO_FIELD(Boolean, truncation);
 };
 
@@ -68,8 +69,8 @@ class MyApiClient : public oatpp::web::client::ApiClient {
 
   API_CALL("GET", "{path}", getEmbeddings, PATH(String, path))
   API_CALL("POST", "{path}", denseEmbedDocuments, PATH(String, path), HEADER(String, openaiHeader, OPENAI_KEY_HEADER), HEADER(String, jinaaiHeader, JINAAI_KEY_HEADER), HEADER(String, voyageaiHeader, VOYAGEAI_KEY_HEADER), HEADER(String, mixedbreadaiHeader, MIXEDBREADAI_KEY_HEADER), HEADER(String, nomicHeader, NOMIC_KEY_HEADER), HEADER(String, mistralaiHeader, MISTRALAI_KEY_HEADER), BODY_DTO(Object<EmbeddingRequestBody>, body))
-  API_CALL("POST", "{path}", contextualizedEmbedDocuments, PATH(String, path), HEADER(String, voyageaiHeader, VOYAGEAI_KEY_HEADER), BODY_DTO(Object<ContextualizedEmbeddingRequestBody>, body))
-  API_CALL("POST", "{path}", multimodalEmbedDocuments, PATH(String, path), HEADER(String, voyageaiHeader, VOYAGEAI_KEY_HEADER), BODY_DTO(Object<MultimodalEmbeddingRequestBody>, body))
+  API_CALL("POST", "{path}", contextualizedEmbedDocuments, PATH(String, path), HEADER(String, authHeader, "Authorization"), BODY_DTO(Object<ContextualizedEmbeddingRequestBody>, body))
+  API_CALL("POST", "{path}", voyageaiDirectEmbedDocuments, PATH(String, path), HEADER(String, authHeader, "Authorization"), BODY_DTO(Object<VoyageAIEmbeddingRequestBody>, body))
 
 
  #include OATPP_CODEGEN_END(ApiClient) //<- End codegen

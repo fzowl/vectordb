@@ -54,30 +54,32 @@ Status EmbeddingService::denseEmbedDocuments(
   std::unordered_map<std::string, std::string> &headers,
   bool isReducingDimension
 ) {
-  // Check if this is a VoyageAI contextualized or multimodal model
+  // Check if this is a VoyageAI model requiring direct API call
   bool isContextualized = (model_name.find("voyage-context") != std::string::npos);
-  bool isMultimodal = (model_name.find("voyage-multimodal") != std::string::npos);
+  // Direct VoyageAI standard model (voyage-3.5, voyage-3, etc.) - not proxied
+  bool isVoyageAIDirect = (model_name.find("voyage-") != std::string::npos) && !isContextualized;
 
-  // Use VoyageAI advanced embedding APIs if applicable
-  if (isContextualized || isMultimodal) {
+  // Use VoyageAI direct or contextualized embedding API if applicable
+  if (isContextualized || isVoyageAIDirect) {
     if (headers.find(VOYAGEAI_KEY_HEADER) == headers.end()) {
       return Status(INVALID_PAYLOAD, "Missing VoyageAI API key.");
     }
     std::string voyageai_key = headers[VOYAGEAI_KEY_HEADER];
+    std::string auth_header = "Bearer " + voyageai_key;
 
     int attempt = 0;
     while (attempt < EmbeddingDocsRetry) {
       try {
-        // Build inputs list - each document as a separate list with single element
-        auto inputs = oatpp::List<oatpp::List<oatpp::String>>({});
-        for (size_t idx = start_record; idx < end_record; ++idx) {
-          auto docList = oatpp::List<oatpp::String>({});
-          docList->push_back(oatpp::String(std::get<std::string>(attr_column_container[idx]).c_str()));
-          inputs->push_back(docList);
-        }
-
         oatpp::String responseBody;
+
         if (isContextualized) {
+          // Build inputs list for contextualized embeddings
+          auto inputs = oatpp::List<oatpp::List<oatpp::String>>({});
+          for (size_t idx = start_record; idx < end_record; ++idx) {
+            auto docList = oatpp::List<oatpp::String>({});
+            docList->push_back(oatpp::String(std::get<std::string>(attr_column_container[idx]).c_str()));
+            inputs->push_back(docList);
+          }
           auto requestBody = ContextualizedEmbeddingRequestBody::createShared();
           requestBody->model = model_name;
           requestBody->input_type = "document";
@@ -86,23 +88,46 @@ Status EmbeddingService::denseEmbedDocuments(
           if (isReducingDimension && dimension > 0) {
             requestBody->output_dimension = dimension;
           }
-          responseBody = m_client->contextualizedEmbedDocuments("/v1/contextualizedembeddings", voyageai_key, requestBody)->readBodyToString();
-        } else {  // isMultimodal
-          auto requestBody = MultimodalEmbeddingRequestBody::createShared();
-          requestBody->model = model_name;
+          responseBody = m_client->contextualizedEmbedDocuments("/v1/contextualizedembeddings", auth_header, requestBody)->readBodyToString();
+        } else {
+          // Direct VoyageAI standard embeddings API
+          auto requestBody = VoyageAIEmbeddingRequestBody::createShared();
+          // Strip voyageai/ prefix if present
+          std::string actual_model = model_name;
+          if (server::CommonUtil::StartsWith(model_name, "voyageai/")) {
+            actual_model = model_name.substr(9);  // Remove "voyageai/" prefix
+          }
+          requestBody->model = actual_model;
           requestBody->input_type = "document";
           requestBody->truncation = true;
-          requestBody->inputs = inputs;
-          responseBody = m_client->multimodalEmbedDocuments("/v1/multimodalembeddings", voyageai_key, requestBody)->readBodyToString();
+          requestBody->input = oatpp::List<oatpp::String>({});
+          for (size_t idx = start_record; idx < end_record; ++idx) {
+            requestBody->input->push_back(oatpp::String(std::get<std::string>(attr_column_container[idx]).c_str()));
+          }
+          if (isReducingDimension && dimension > 0) {
+            requestBody->output_dimension = dimension;
+          }
+          responseBody = m_client->voyageaiDirectEmbedDocuments("/v1/embeddings", auth_header, requestBody)->readBodyToString();
         }
 
         vectordb::Json json;
         json.LoadFromString(responseBody->c_str());
-        if (json.GetInt("statusCode") == 200) {
-          auto embeddings = json.GetArray("result");
+        // VoyageAI returns data array
+        if (json.HasMember("data")) {
+          auto data = json.GetArray("data");
           for (auto idx = start_record; idx < end_record; ++idx) {
-            auto embedding = embeddings.GetArrayElement(idx - start_record);
-            for (auto i = 0; i < dimension; i++) {
+            auto dataItem = data.GetArrayElement(idx - start_record);
+            vectordb::Json embedding;
+            if (isContextualized) {
+              // Contextualized has nested structure: data[i].data[0].embedding
+              auto innerData = dataItem.GetArray("data");
+              auto innerItem = innerData.GetArrayElement(0);
+              embedding = innerItem.GetArray("embedding");
+            } else {
+              // Standard has flat structure: data[i].embedding
+              embedding = dataItem.GetArray("embedding");
+            }
+            for (size_t i = 0; i < dimension; i++) {
               vector_table[idx * dimension + i] = static_cast<float>((float)(embedding.GetArrayElement(i).GetDouble()));
             }
           }
@@ -221,28 +246,31 @@ Status EmbeddingService::denseEmbedQuery(
   std::unordered_map<std::string, std::string> &headers,
   bool isReducingDimension
 ) {
-  // Check if this is a VoyageAI contextualized or multimodal model
+  // Check if this is a VoyageAI model requiring direct API call
   bool isContextualized = (model_name.find("voyage-context") != std::string::npos);
-  bool isMultimodal = (model_name.find("voyage-multimodal") != std::string::npos);
+  // Direct VoyageAI standard model (voyage-3.5, voyage-3, etc.) - not proxied
+  bool isVoyageAIDirect = (model_name.find("voyage-") != std::string::npos) && !isContextualized;
 
-  // Use VoyageAI advanced embedding APIs if applicable
-  if (isContextualized || isMultimodal) {
+  // Use VoyageAI direct or contextualized embedding API if applicable
+  if (isContextualized || isVoyageAIDirect) {
     if (headers.find(VOYAGEAI_KEY_HEADER) == headers.end()) {
       return Status(INVALID_PAYLOAD, "Missing VoyageAI API key.");
     }
     std::string voyageai_key = headers[VOYAGEAI_KEY_HEADER];
+    std::string auth_header = "Bearer " + voyageai_key;
 
     int attempt = 0;
     while (attempt < EmbeddingQueryRetry) {
       try {
-        // Build inputs list with single query
-        auto inputs = oatpp::List<oatpp::List<oatpp::String>>({});
-        auto queryList = oatpp::List<oatpp::String>({});
-        queryList->push_back(oatpp::String(query.c_str()));
-        inputs->push_back(queryList);
-
         oatpp::String responseBody;
+
         if (isContextualized) {
+          // Build inputs list with single query for contextualized embeddings
+          auto inputs = oatpp::List<oatpp::List<oatpp::String>>({});
+          auto queryList = oatpp::List<oatpp::String>({});
+          queryList->push_back(oatpp::String(query.c_str()));
+          inputs->push_back(queryList);
+
           auto requestBody = ContextualizedEmbeddingRequestBody::createShared();
           requestBody->model = model_name;
           requestBody->input_type = "query";
@@ -251,26 +279,49 @@ Status EmbeddingService::denseEmbedQuery(
           if (isReducingDimension && dimension > 0) {
             requestBody->output_dimension = dimension;
           }
-          responseBody = m_client->contextualizedEmbedDocuments("/v1/contextualizedembeddings", voyageai_key, requestBody)->readBodyToString();
-        } else {  // isMultimodal
-          auto requestBody = MultimodalEmbeddingRequestBody::createShared();
-          requestBody->model = model_name;
+          responseBody = m_client->contextualizedEmbedDocuments("/v1/contextualizedembeddings", auth_header, requestBody)->readBodyToString();
+        } else {
+          // Direct VoyageAI standard embeddings API
+          auto requestBody = VoyageAIEmbeddingRequestBody::createShared();
+          // Strip voyageai/ prefix if present
+          std::string actual_model = model_name;
+          if (server::CommonUtil::StartsWith(model_name, "voyageai/")) {
+            actual_model = model_name.substr(9);  // Remove "voyageai/" prefix
+          }
+          requestBody->model = actual_model;
           requestBody->input_type = "query";
           requestBody->truncation = true;
-          requestBody->inputs = inputs;
-          responseBody = m_client->multimodalEmbedDocuments("/v1/multimodalembeddings", voyageai_key, requestBody)->readBodyToString();
+          requestBody->input = oatpp::List<oatpp::String>({});
+          requestBody->input->push_back(oatpp::String(query.c_str()));
+          if (isReducingDimension && dimension > 0) {
+            requestBody->output_dimension = dimension;
+          }
+          responseBody = m_client->voyageaiDirectEmbedDocuments("/v1/embeddings", auth_header, requestBody)->readBodyToString();
         }
 
         vectordb::Json json;
         json.LoadFromString(responseBody->c_str());
-        if (json.GetInt("statusCode") == 200) {
-          auto embeddings = json.GetArray("result");
-          auto embedding = embeddings.GetArrayElement(0);
+        // VoyageAI returns data array
+        if (json.HasMember("data")) {
+          auto data = json.GetArray("data");
+          auto dataItem = data.GetArrayElement(0);
+          vectordb::Json embedding;
+          if (isContextualized) {
+            // Contextualized has nested structure: data[0].data[0].embedding
+            auto innerData = dataItem.GetArray("data");
+            auto innerItem = innerData.GetArrayElement(0);
+            embedding = innerItem.GetArray("embedding");
+          } else {
+            // Standard has flat structure: data[0].embedding
+            embedding = dataItem.GetArray("embedding");
+          }
           denseQueryVec.resize(dimension);
           for (size_t i = 0; i < dimension; i++) {
             denseQueryVec[i] = static_cast<engine::DenseVectorElement>(embedding.GetArrayElement(i).GetDouble());
           }
           return Status::OK();
+        } else {
+          logger_.Error(std::string("VoyageAI embedding query response: ") + responseBody->c_str());
         }
       } catch (const std::exception& e) {
         logger_.Error(std::string("Exception in VoyageAI embedding query: ") + e.what());
