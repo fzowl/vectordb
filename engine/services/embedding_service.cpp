@@ -55,8 +55,8 @@ Status EmbeddingService::denseEmbedDocuments(
   bool isReducingDimension
 ) {
   // Check if this is a VoyageAI contextualized or multimodal model
-  bool isContextualized = (model_name.find("voyage-context") != std::string::npos);
-  bool isMultimodal = (model_name.find("voyage-multimodal") != std::string::npos);
+  bool isContextualized = server::CommonUtil::IsVoyageAIContextualizedModel(model_name);
+  bool isMultimodal = server::CommonUtil::IsVoyageAIMultimodalModel(model_name);
 
   // Use VoyageAI advanced embedding APIs if applicable
   if (isContextualized || isMultimodal) {
@@ -222,8 +222,8 @@ Status EmbeddingService::denseEmbedQuery(
   bool isReducingDimension
 ) {
   // Check if this is a VoyageAI contextualized or multimodal model
-  bool isContextualized = (model_name.find("voyage-context") != std::string::npos);
-  bool isMultimodal = (model_name.find("voyage-multimodal") != std::string::npos);
+  bool isContextualized = server::CommonUtil::IsVoyageAIContextualizedModel(model_name);
+  bool isMultimodal = server::CommonUtil::IsVoyageAIMultimodalModel(model_name);
 
   // Use VoyageAI advanced embedding APIs if applicable
   if (isContextualized || isMultimodal) {

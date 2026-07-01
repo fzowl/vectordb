@@ -35,6 +35,15 @@ class CommonUtil {
   static bool IsValidName(const std::string& name);
 
   static bool StartsWith(const std::string& fullString, const std::string& starting);
+
+  // Returns true for VoyageAI contextualized chunk embedding models
+  // (e.g. voyage-context-3, voyage-context-4), which use the
+  // /v1/contextualizedembeddings endpoint.
+  static bool IsVoyageAIContextualizedModel(const std::string& model_name);
+
+  // Returns true for VoyageAI multimodal embedding models
+  // (e.g. voyage-multimodal-3), which use the /v1/multimodalembeddings endpoint.
+  static bool IsVoyageAIMultimodalModel(const std::string& model_name);
 };
 
 }  // namespace server

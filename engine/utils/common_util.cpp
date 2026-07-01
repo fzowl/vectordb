@@ -322,5 +322,13 @@ bool CommonUtil::StartsWith(const std::string& fullString, const std::string& st
   }
 }
 
+bool CommonUtil::IsVoyageAIContextualizedModel(const std::string& model_name) {
+  return model_name.find("voyage-context") != std::string::npos;
+}
+
+bool CommonUtil::IsVoyageAIMultimodalModel(const std::string& model_name) {
+  return model_name.find("voyage-multimodal") != std::string::npos;
+}
+
 }  // namespace server
 }  // namespace vectordb
