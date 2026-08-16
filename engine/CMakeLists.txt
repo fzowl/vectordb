@@ -157,6 +157,10 @@ set(DB_TEST_FILES)
 file(GLOB ENGINE_DB_TEST_FILES "test/engine/db/*.cpp")
 list(APPEND DB_TEST_FILES ${ENGINE_DB_TEST_FILES})
 
+# Add service-level unit tests
+file(GLOB ENGINE_SERVICES_TEST_FILES "test/engine/services/*.cpp")
+list(APPEND DB_TEST_FILES ${ENGINE_SERVICES_TEST_FILES})
+
 add_executable(
   vector_db_test
   ${DB_TEST_FILES}

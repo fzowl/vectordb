@@ -7,6 +7,7 @@
 #include <string>
 #include <unordered_map>
 #include <utils/constants.hpp>
+#include "services/embedding_batching.hpp"
 
 #include "oatpp-curl/RequestExecutor.hpp"
 #include "oatpp/web/client/ApiClient.hpp"
@@ -43,8 +44,12 @@ class ContextualizedEmbeddingRequestBody: public oatpp::DTO {
   DTO_INIT(ContextualizedEmbeddingRequestBody, DTO)
 
   DTO_FIELD(String, model);
-  DTO_FIELD(List<List<String>>, inputs);
+  // Flat list of inputs: each string is embedded as its own independent
+  // document (see GetContextualizedChunkingParams).
+  DTO_FIELD(List<String>, inputs);
   DTO_FIELD(String, input_type);
+  DTO_FIELD(Boolean, enable_auto_chunking);
+  DTO_FIELD(Int32, chunk_size);
   DTO_FIELD(Int32, output_dimension);
   DTO_FIELD(String, output_dtype);
 };
