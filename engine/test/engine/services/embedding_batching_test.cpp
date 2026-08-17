@@ -85,6 +85,11 @@ TEST(ContextualizedChunking, QueryPathDisablesAutoChunking) {
 TEST(ModelTokenLimit, KnownModels) {
   EXPECT_EQ(GetModelTokenLimit("voyage-4-lite"), 1000000u);
   EXPECT_EQ(GetModelTokenLimit("voyage-4"), 320000u);
+  EXPECT_EQ(GetModelTokenLimit("voyage-4-large"), 120000u);
+  EXPECT_EQ(GetModelTokenLimit("voyage-3.5-lite"), 1000000u);
+  // Contextualized models: 120K total tokens with auto-chunking enabled.
+  EXPECT_EQ(GetModelTokenLimit("voyage-context-4"), 120000u);
+  EXPECT_EQ(GetModelTokenLimit("voyage-context-3"), 120000u);
 }
 
 TEST(ModelTokenLimit, StripsProviderPrefix) {
@@ -93,7 +98,9 @@ TEST(ModelTokenLimit, StripsProviderPrefix) {
 }
 
 TEST(ModelTokenLimit, UnknownModelFallsBackToDefault) {
-  EXPECT_EQ(GetModelTokenLimit("voyage-4-large"), 120000u);
+  // Models with no published batch token limit use the conservative fallback.
+  EXPECT_EQ(GetModelTokenLimit("voyage-code-4"), 120000u);
+  EXPECT_EQ(GetModelTokenLimit("voyage-4-nano"), 120000u);
   EXPECT_EQ(GetModelTokenLimit("voyageai/some-future-model"), 120000u);
 }
 

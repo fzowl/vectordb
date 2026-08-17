@@ -65,33 +65,100 @@ Status EmbeddingService::denseEmbedDocuments(
     }
     std::string voyageai_key = headers[VOYAGEAI_KEY_HEADER];
 
-    int attempt = 0;
-    while (attempt < EmbeddingDocsRetry) {
-      try {
-        oatpp::String responseBody;
-        if (isContextualized) {
-          // Each input string is embedded as its own independent document: send
-          // a flat list with auto-chunking so every string resolves to exactly
-          // one chunk and one embedding.
-          auto inputs = oatpp::List<oatpp::String>({});
-          for (size_t idx = start_record; idx < end_record; ++idx) {
-            inputs->push_back(oatpp::String(std::get<std::string>(attr_column_container[idx]).c_str()));
+    if (isContextualized) {
+      // Each input string is embedded as its own independent document: send a
+      // flat list with auto-chunking so every string resolves to exactly one
+      // chunk and one embedding. Split the range into token-aware batches so a
+      // single request never exceeds the model's total token limit (120K for
+      // voyage-context-*) or the per-request input cap.
+      std::vector<std::string> texts;
+      texts.reserve(end_record - start_record);
+      std::vector<size_t> token_counts;
+      token_counts.reserve(end_record - start_record);
+      for (size_t idx = start_record; idx < end_record; ++idx) {
+        const auto& text = std::get<std::string>(attr_column_container[idx]);
+        texts.push_back(text);
+        token_counts.push_back(EstimateTokenCount(text));
+      }
+      auto batches = BuildTokenAwareBatches(token_counts, GetModelTokenLimit(model_name), EmbeddingMaxBatchSize);
+
+      for (const auto& batch : batches) {
+        const size_t b_start = start_record + batch.first;
+        const size_t b_end = start_record + batch.second;
+        const size_t b_count = b_end - b_start;
+        int attempt = 0;
+        bool succeeded = false;
+        while (attempt < EmbeddingDocsRetry) {
+          try {
+            auto inputs = oatpp::List<oatpp::String>({});
+            for (size_t idx = b_start; idx < b_end; ++idx) {
+              inputs->push_back(oatpp::String(texts[idx - start_record].c_str()));
+            }
+            auto requestBody = ContextualizedEmbeddingRequestBody::createShared();
+            requestBody->model = model_name;
+            requestBody->input_type = "document";
+            requestBody->output_dtype = "float";
+            requestBody->inputs = inputs;
+            auto chunking = GetContextualizedChunkingParams("document");
+            requestBody->enable_auto_chunking = chunking.enable_auto_chunking;
+            if (chunking.has_chunk_size) {
+              requestBody->chunk_size = chunking.chunk_size;
+            }
+            if (isReducingDimension && dimension > 0) {
+              requestBody->output_dimension = dimension;
+            }
+            auto responseBody = m_client->contextualizedEmbedDocuments("/v1/contextualizedembeddings", voyageai_key, requestBody)->readBodyToString();
+
+            vectordb::Json json;
+            json.LoadFromString(responseBody->c_str());
+            if (json.GetInt("statusCode") == 200) {
+              auto embeddings = json.GetArray("result");
+              // Guard the 1:1 input->embedding assumption. Auto-chunking yields
+              // exactly one chunk (hence one embedding) per input only when that
+              // input is <= chunk_size tokens. An input larger than chunk_size
+              // splits into multiple chunks, so the result would no longer line
+              // up with inputs and the copy below would read the wrong vector for
+              // this input and every input after it. Fail the batch loudly
+              // instead of silently corrupting embeddings.
+              if (embeddings.GetSize() != b_count) {
+                logger_.Error(
+                    std::string("VoyageAI contextualized embedding count mismatch: expected ") +
+                    std::to_string(b_count) + ", got " + std::to_string(embeddings.GetSize()) +
+                    ". An input likely exceeds the " + std::to_string(kContextualizedDocChunkSize) +
+                    "-token chunk size and was split into multiple chunks.");
+              } else {
+                for (size_t idx = b_start; idx < b_end; ++idx) {
+                  auto embedding = embeddings.GetArrayElement(idx - b_start);
+                  for (auto i = 0; i < dimension; i++) {
+                    vector_table[idx * dimension + i] = static_cast<float>((float)(embedding.GetArrayElement(i).GetDouble()));
+                  }
+                }
+                succeeded = true;
+                break;
+              }
+            } else {
+              logger_.Error(std::string("VoyageAI embedding response: ") + responseBody->c_str());
+            }
+          } catch (const std::exception& e) {
+            logger_.Error(std::string("Exception in VoyageAI embedding: ") + e.what());
           }
-          auto requestBody = ContextualizedEmbeddingRequestBody::createShared();
-          requestBody->model = model_name;
-          requestBody->input_type = "document";
-          requestBody->output_dtype = "float";
-          requestBody->inputs = inputs;
-          auto chunking = GetContextualizedChunkingParams("document");
-          requestBody->enable_auto_chunking = chunking.enable_auto_chunking;
-          if (chunking.has_chunk_size) {
-            requestBody->chunk_size = chunking.chunk_size;
+          attempt++;
+          if (attempt >= EmbeddingDocsRetry) {
+            break;
           }
-          if (isReducingDimension && dimension > 0) {
-            requestBody->output_dimension = dimension;
-          }
-          responseBody = m_client->contextualizedEmbedDocuments("/v1/contextualizedembeddings", voyageai_key, requestBody)->readBodyToString();
-        } else {  // isMultimodal
+          int delaySec = EmbeddingBackoffInitialDelaySec * std::pow(EmbeddingBackoffExpBase, attempt);
+          std::this_thread::sleep_for(std::chrono::seconds(delaySec));
+          logger_.Info("Retry VoyageAI embedding documents.");
+        }
+        if (!succeeded) {
+          return Status(INFRA_UNEXPECTED_ERROR, "Failed to embed the documents with VoyageAI.");
+        }
+      }
+      return Status::OK();
+    } else {  // isMultimodal
+      int attempt = 0;
+      while (attempt < EmbeddingDocsRetry) {
+        try {
           // Multimodal inputs stay as a list of single-element documents.
           auto inputs = oatpp::List<oatpp::List<oatpp::String>>({});
           for (size_t idx = start_record; idx < end_record; ++idx) {
@@ -104,35 +171,35 @@ Status EmbeddingService::denseEmbedDocuments(
           requestBody->input_type = "document";
           requestBody->truncation = true;
           requestBody->inputs = inputs;
-          responseBody = m_client->multimodalEmbedDocuments("/v1/multimodalembeddings", voyageai_key, requestBody)->readBodyToString();
-        }
+          auto responseBody = m_client->multimodalEmbedDocuments("/v1/multimodalembeddings", voyageai_key, requestBody)->readBodyToString();
 
-        vectordb::Json json;
-        json.LoadFromString(responseBody->c_str());
-        if (json.GetInt("statusCode") == 200) {
-          auto embeddings = json.GetArray("result");
-          for (auto idx = start_record; idx < end_record; ++idx) {
-            auto embedding = embeddings.GetArrayElement(idx - start_record);
-            for (auto i = 0; i < dimension; i++) {
-              vector_table[idx * dimension + i] = static_cast<float>((float)(embedding.GetArrayElement(i).GetDouble()));
+          vectordb::Json json;
+          json.LoadFromString(responseBody->c_str());
+          if (json.GetInt("statusCode") == 200) {
+            auto embeddings = json.GetArray("result");
+            for (auto idx = start_record; idx < end_record; ++idx) {
+              auto embedding = embeddings.GetArrayElement(idx - start_record);
+              for (auto i = 0; i < dimension; i++) {
+                vector_table[idx * dimension + i] = static_cast<float>((float)(embedding.GetArrayElement(i).GetDouble()));
+              }
             }
+            return Status::OK();
+          } else {
+            logger_.Error(std::string("VoyageAI embedding response: ") + responseBody->c_str());
           }
-          return Status::OK();
-        } else {
-          logger_.Error(std::string("VoyageAI embedding response: ") + responseBody->c_str());
+        } catch (const std::exception& e) {
+          logger_.Error(std::string("Exception in VoyageAI embedding: ") + e.what());
         }
-      } catch (const std::exception& e) {
-        logger_.Error(std::string("Exception in VoyageAI embedding: ") + e.what());
+        attempt++;
+        if (attempt >= EmbeddingDocsRetry) {
+          break;
+        }
+        int delaySec = EmbeddingBackoffInitialDelaySec * std::pow(EmbeddingBackoffExpBase, attempt);
+        std::this_thread::sleep_for(std::chrono::seconds(delaySec));
+        logger_.Info("Retry VoyageAI embedding documents.");
       }
-      attempt++;
-      if (attempt >= EmbeddingDocsRetry) {
-        break;
-      }
-      int delaySec = EmbeddingBackoffInitialDelaySec * std::pow(EmbeddingBackoffExpBase, attempt);
-      std::this_thread::sleep_for(std::chrono::seconds(delaySec));
-      logger_.Info("Retry VoyageAI embedding documents.");
+      return Status(INFRA_UNEXPECTED_ERROR, "Failed to embed the documents with VoyageAI.");
     }
-    return Status(INFRA_UNEXPECTED_ERROR, "Failed to embed the documents with VoyageAI.");
   } else {
     // Use standard embeddings API.
     std::string openai_key = "";

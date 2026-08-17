@@ -9,7 +9,17 @@ size_t EstimateTokenCount(const std::string& text) {
   if (text.empty()) {
     return 0;
   }
-  // ~4 characters per token, rounded up.
+  // ~4 characters per token, rounded up. This is the widely used heuristic for
+  // English-like text and is only used to build token-aware batches, so a
+  // slightly low estimate simply yields larger (but still valid) batches.
+  //
+  // Limitation: text.size() counts bytes, not characters. For CJK/multibyte
+  // content this OVER-counts bytes per character but still UNDER-counts tokens
+  // (such scripts pack far fewer characters per token), so a batch built under
+  // the limit can still exceed the true server-side token count and, combined
+  // with the fixed retry budget, fail. If that becomes a problem for
+  // non-Latin-heavy workloads, lower the divisor here (a more conservative
+  // estimate just yields smaller batches).
   return (text.size() + 3) / 4;
 }
 
@@ -21,17 +31,31 @@ size_t GetModelTokenLimit(const std::string& model_name) {
     name = name.substr(slash + 1);
   }
 
-  // Per-request total token limits from the VoyageAI docs. Anything not listed
-  // falls back to the conservative 120000 default below.
+  // Per-request TOTAL token limits ("batch token limit") from the VoyageAI docs
+  // (https://docs.voyageai.com/docs/embeddings and .../contextualized-chunk-embeddings).
+  // Models whose batch token limit is not published there are intentionally
+  // omitted and fall back to the conservative 120000 default below (safe: it
+  // only yields smaller batches).
   static const std::unordered_map<std::string, size_t> limits = {
-      {"voyage-4-lite", 1000000},
+      // Current generation.
+      {"voyage-4-large", 120000},
       {"voyage-4", 320000},
-      {"voyage-3.5-lite", 1000000},
+      {"voyage-4-lite", 1000000},
+      {"voyage-finance-2", 120000},
+      {"voyage-law-2", 120000},
+      // Contextualized models: 120K total tokens when auto-chunking is enabled.
+      {"voyage-context-4", 120000},
+      {"voyage-context-3", 120000},
+      // Previous generation (still API-accessible).
+      {"voyage-3-large", 120000},
       {"voyage-3.5", 320000},
-      {"voyage-3-lite", 1000000},
-      {"voyage-3", 320000},
+      {"voyage-3.5-lite", 1000000},
+      {"voyage-code-3", 120000},
+      {"voyage-multilingual-2", 120000},
+      {"voyage-large-2-instruct", 120000},
       {"voyage-2", 320000},
-      {"voyage-02", 320000},
+      // Note: voyage-code-4, voyage-4-nano, voyage-3, voyage-3-lite and
+      // voyage-large-2 do not publish a batch token limit and use the fallback.
   };
   auto it = limits.find(name);
   return it != limits.end() ? it->second : 120000;
