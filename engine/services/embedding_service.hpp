@@ -38,12 +38,28 @@ class EmbeddingRequestBody: public oatpp::DTO {
   DTO_FIELD(Int32, dimensions);
 };
 
+// Contextualized chunk embeddings accept inputs as Union[List[List[str]], List[str]]
+// per https://docs.voyageai.com/docs/contextualized-chunk-embeddings. The nested
+// List[List[str]] form (below) carries pre-chunked documents; the flat List[str] form
+// (ContextualizedQueryRequestBody) is the documented shape for queries. Both are
+// supported.
 class ContextualizedEmbeddingRequestBody: public oatpp::DTO {
 
   DTO_INIT(ContextualizedEmbeddingRequestBody, DTO)
 
   DTO_FIELD(String, model);
   DTO_FIELD(List<List<String>>, inputs);
+  DTO_FIELD(String, input_type);
+  DTO_FIELD(Int32, output_dimension);
+  DTO_FIELD(String, output_dtype);
+};
+
+class ContextualizedQueryRequestBody: public oatpp::DTO {
+
+  DTO_INIT(ContextualizedQueryRequestBody, DTO)
+
+  DTO_FIELD(String, model);
+  DTO_FIELD(List<String>, inputs);
   DTO_FIELD(String, input_type);
   DTO_FIELD(Int32, output_dimension);
   DTO_FIELD(String, output_dtype);
@@ -69,6 +85,7 @@ class MyApiClient : public oatpp::web::client::ApiClient {
   API_CALL("GET", "{path}", getEmbeddings, PATH(String, path))
   API_CALL("POST", "{path}", denseEmbedDocuments, PATH(String, path), HEADER(String, openaiHeader, OPENAI_KEY_HEADER), HEADER(String, jinaaiHeader, JINAAI_KEY_HEADER), HEADER(String, voyageaiHeader, VOYAGEAI_KEY_HEADER), HEADER(String, mixedbreadaiHeader, MIXEDBREADAI_KEY_HEADER), HEADER(String, nomicHeader, NOMIC_KEY_HEADER), HEADER(String, mistralaiHeader, MISTRALAI_KEY_HEADER), BODY_DTO(Object<EmbeddingRequestBody>, body))
   API_CALL("POST", "{path}", contextualizedEmbedDocuments, PATH(String, path), HEADER(String, voyageaiHeader, VOYAGEAI_KEY_HEADER), BODY_DTO(Object<ContextualizedEmbeddingRequestBody>, body))
+  API_CALL("POST", "{path}", contextualizedEmbedQuery, PATH(String, path), HEADER(String, voyageaiHeader, VOYAGEAI_KEY_HEADER), BODY_DTO(Object<ContextualizedQueryRequestBody>, body))
   API_CALL("POST", "{path}", multimodalEmbedDocuments, PATH(String, path), HEADER(String, voyageaiHeader, VOYAGEAI_KEY_HEADER), BODY_DTO(Object<MultimodalEmbeddingRequestBody>, body))
 
 
