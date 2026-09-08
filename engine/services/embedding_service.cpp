@@ -54,40 +54,49 @@ Status EmbeddingService::denseEmbedDocuments(
   std::unordered_map<std::string, std::string> &headers,
   bool isReducingDimension
 ) {
-  // Check if this is a VoyageAI contextualized or multimodal model
+  // Check if this is a VoyageAI by MongoDB contextualized or multimodal model
   bool isContextualized = (model_name.find("voyage-context") != std::string::npos);
   bool isMultimodal = (model_name.find("voyage-multimodal") != std::string::npos);
 
-  // Use VoyageAI advanced embedding APIs if applicable
+  // Use VoyageAI by MongoDB advanced embedding APIs if applicable
   if (isContextualized || isMultimodal) {
     if (headers.find(VOYAGEAI_KEY_HEADER) == headers.end()) {
-      return Status(INVALID_PAYLOAD, "Missing VoyageAI API key.");
+      return Status(INVALID_PAYLOAD, "Missing VoyageAI by MongoDB API key.");
     }
     std::string voyageai_key = headers[VOYAGEAI_KEY_HEADER];
 
     int attempt = 0;
     while (attempt < EmbeddingDocsRetry) {
       try {
-        // Build inputs list - each document as a separate list with single element
-        auto inputs = oatpp::List<oatpp::List<oatpp::String>>({});
-        for (size_t idx = start_record; idx < end_record; ++idx) {
-          auto docList = oatpp::List<oatpp::String>({});
-          docList->push_back(oatpp::String(std::get<std::string>(attr_column_container[idx]).c_str()));
-          inputs->push_back(docList);
-        }
-
         oatpp::String responseBody;
         if (isContextualized) {
-          auto requestBody = ContextualizedEmbeddingRequestBody::createShared();
+          // Contextualized documents: send a flat list[str] of full-document
+          // strings and let the backend auto-chunk each one. With a per-chunk
+          // upper bound of ContextualizedAutoChunkSize tokens every input
+          // resolves to a single chunk and one deterministic embedding.
+          auto inputs = oatpp::List<oatpp::String>({});
+          for (size_t idx = start_record; idx < end_record; ++idx) {
+            inputs->push_back(oatpp::String(std::get<std::string>(attr_column_container[idx]).c_str()));
+          }
+          auto requestBody = ContextualizedEmbeddingDocsRequestBody::createShared();
           requestBody->model = model_name;
           requestBody->input_type = "document";
           requestBody->output_dtype = "float";
           requestBody->inputs = inputs;
+          requestBody->enable_auto_chunking = true;
+          requestBody->chunk_size = ContextualizedAutoChunkSize;
           if (isReducingDimension && dimension > 0) {
             requestBody->output_dimension = dimension;
           }
-          responseBody = m_client->contextualizedEmbedDocuments("/v1/contextualizedembeddings", voyageai_key, requestBody)->readBodyToString();
+          responseBody = m_client->contextualizedEmbedDocumentsAutoChunk("/v1/contextualizedembeddings", voyageai_key, requestBody)->readBodyToString();
         } else {  // isMultimodal
+          // Multimodal inputs stay nested: each document is its own list.
+          auto inputs = oatpp::List<oatpp::List<oatpp::String>>({});
+          for (size_t idx = start_record; idx < end_record; ++idx) {
+            auto docList = oatpp::List<oatpp::String>({});
+            docList->push_back(oatpp::String(std::get<std::string>(attr_column_container[idx]).c_str()));
+            inputs->push_back(docList);
+          }
           auto requestBody = MultimodalEmbeddingRequestBody::createShared();
           requestBody->model = model_name;
           requestBody->input_type = "document";
@@ -108,10 +117,10 @@ Status EmbeddingService::denseEmbedDocuments(
           }
           return Status::OK();
         } else {
-          logger_.Error(std::string("VoyageAI embedding response: ") + responseBody->c_str());
+          logger_.Error(std::string("VoyageAI by MongoDB embedding response: ") + responseBody->c_str());
         }
       } catch (const std::exception& e) {
-        logger_.Error(std::string("Exception in VoyageAI embedding: ") + e.what());
+        logger_.Error(std::string("Exception in VoyageAI by MongoDB embedding: ") + e.what());
       }
       attempt++;
       if (attempt >= EmbeddingDocsRetry) {
@@ -119,9 +128,9 @@ Status EmbeddingService::denseEmbedDocuments(
       }
       int delaySec = EmbeddingBackoffInitialDelaySec * std::pow(EmbeddingBackoffExpBase, attempt);
       std::this_thread::sleep_for(std::chrono::seconds(delaySec));
-      logger_.Info("Retry VoyageAI embedding documents.");
+      logger_.Info("Retry VoyageAI by MongoDB embedding documents.");
     }
-    return Status(INFRA_UNEXPECTED_ERROR, "Failed to embed the documents with VoyageAI.");
+    return Status(INFRA_UNEXPECTED_ERROR, "Failed to embed the documents with VoyageAI by MongoDB.");
   } else {
     // Use standard embeddings API
     int attempt = 0;
@@ -149,7 +158,7 @@ Status EmbeddingService::denseEmbedDocuments(
           jinaai_key = headers[JINAAI_KEY_HEADER];
         } else if (server::CommonUtil::StartsWith(model_name, "voyageai/")) {
           if (headers.find(VOYAGEAI_KEY_HEADER) == headers.end()) {
-            return Status(INVALID_PAYLOAD, "Missing VoyageAI API key.");
+            return Status(INVALID_PAYLOAD, "Missing VoyageAI by MongoDB API key.");
           }
           voyageai_key = headers[VOYAGEAI_KEY_HEADER];
         } else if (server::CommonUtil::StartsWith(model_name, "mixedbreadai/")) {
@@ -221,14 +230,14 @@ Status EmbeddingService::denseEmbedQuery(
   std::unordered_map<std::string, std::string> &headers,
   bool isReducingDimension
 ) {
-  // Check if this is a VoyageAI contextualized or multimodal model
+  // Check if this is a VoyageAI by MongoDB contextualized or multimodal model
   bool isContextualized = (model_name.find("voyage-context") != std::string::npos);
   bool isMultimodal = (model_name.find("voyage-multimodal") != std::string::npos);
 
-  // Use VoyageAI advanced embedding APIs if applicable
+  // Use VoyageAI by MongoDB advanced embedding APIs if applicable
   if (isContextualized || isMultimodal) {
     if (headers.find(VOYAGEAI_KEY_HEADER) == headers.end()) {
-      return Status(INVALID_PAYLOAD, "Missing VoyageAI API key.");
+      return Status(INVALID_PAYLOAD, "Missing VoyageAI by MongoDB API key.");
     }
     std::string voyageai_key = headers[VOYAGEAI_KEY_HEADER];
 
@@ -273,7 +282,7 @@ Status EmbeddingService::denseEmbedQuery(
           return Status::OK();
         }
       } catch (const std::exception& e) {
-        logger_.Error(std::string("Exception in VoyageAI embedding query: ") + e.what());
+        logger_.Error(std::string("Exception in VoyageAI by MongoDB embedding query: ") + e.what());
       }
       attempt++;
       if (attempt >= EmbeddingQueryRetry) {
@@ -281,9 +290,9 @@ Status EmbeddingService::denseEmbedQuery(
       }
       int delaySec = EmbeddingBackoffInitialDelaySec * std::pow(EmbeddingBackoffExpBase, attempt);
       std::this_thread::sleep_for(std::chrono::seconds(delaySec));
-      logger_.Info("Retry VoyageAI embedding query.");
+      logger_.Info("Retry VoyageAI by MongoDB embedding query.");
     }
-    return Status(INFRA_UNEXPECTED_ERROR, "Failed to embed the query with VoyageAI.");
+    return Status(INFRA_UNEXPECTED_ERROR, "Failed to embed the query with VoyageAI by MongoDB.");
   } else {
     // Use standard embeddings API
     int attempt = 0;
@@ -319,7 +328,7 @@ Status EmbeddingService::denseEmbedQuery(
           jinaai_key = headers[JINAAI_KEY_HEADER];
         } else if (server::CommonUtil::StartsWith(model_name, "voyageai/")) {
           if (headers.find(VOYAGEAI_KEY_HEADER) == headers.end()) {
-            return Status(INVALID_PAYLOAD, "Missing VoyageAI API key.");
+            return Status(INVALID_PAYLOAD, "Missing VoyageAI by MongoDB API key.");
           }
           voyageai_key = headers[VOYAGEAI_KEY_HEADER];
         } else if (server::CommonUtil::StartsWith(model_name, "mixedbreadai/")) {

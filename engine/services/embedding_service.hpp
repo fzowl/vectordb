@@ -26,6 +26,10 @@ constexpr const int EmbeddingQueryRetry = 2;
 constexpr const int EmbeddingBackoffInitialDelaySec = 1;
 constexpr const int EmbeddingBackoffExpBase = 2;
 constexpr const int EmbeddingBackoffJitter = 1;  // 0 means no jitter, 1 means with jitter
+// Upper bound (in tokens) for backend auto-chunking of contextualized documents.
+// Set to the VoyageAI by MongoDB per-chunk maximum so each document resolves to a
+// single chunk and one deterministic embedding per input.
+constexpr const int ContextualizedAutoChunkSize = 32000;
 
 #include OATPP_CODEGEN_BEGIN(DTO) ///< Begin DTO codegen section
 
@@ -45,6 +49,23 @@ class ContextualizedEmbeddingRequestBody: public oatpp::DTO {
   DTO_FIELD(String, model);
   DTO_FIELD(List<List<String>>, inputs);
   DTO_FIELD(String, input_type);
+  DTO_FIELD(Int32, output_dimension);
+  DTO_FIELD(String, output_dtype);
+};
+
+// Document-side contextualized request. VoyageAI by MongoDB requires a flat
+// list[str] of full-document strings when backend auto-chunking is enabled, so
+// this body carries the chunking parameters that the query path must never send
+// (the API rejects enable_auto_chunking for input_type="query").
+class ContextualizedEmbeddingDocsRequestBody: public oatpp::DTO {
+
+  DTO_INIT(ContextualizedEmbeddingDocsRequestBody, DTO)
+
+  DTO_FIELD(String, model);
+  DTO_FIELD(List<String>, inputs);
+  DTO_FIELD(String, input_type);
+  DTO_FIELD(Boolean, enable_auto_chunking);
+  DTO_FIELD(Int32, chunk_size);
   DTO_FIELD(Int32, output_dimension);
   DTO_FIELD(String, output_dtype);
 };
@@ -69,6 +90,7 @@ class MyApiClient : public oatpp::web::client::ApiClient {
   API_CALL("GET", "{path}", getEmbeddings, PATH(String, path))
   API_CALL("POST", "{path}", denseEmbedDocuments, PATH(String, path), HEADER(String, openaiHeader, OPENAI_KEY_HEADER), HEADER(String, jinaaiHeader, JINAAI_KEY_HEADER), HEADER(String, voyageaiHeader, VOYAGEAI_KEY_HEADER), HEADER(String, mixedbreadaiHeader, MIXEDBREADAI_KEY_HEADER), HEADER(String, nomicHeader, NOMIC_KEY_HEADER), HEADER(String, mistralaiHeader, MISTRALAI_KEY_HEADER), BODY_DTO(Object<EmbeddingRequestBody>, body))
   API_CALL("POST", "{path}", contextualizedEmbedDocuments, PATH(String, path), HEADER(String, voyageaiHeader, VOYAGEAI_KEY_HEADER), BODY_DTO(Object<ContextualizedEmbeddingRequestBody>, body))
+  API_CALL("POST", "{path}", contextualizedEmbedDocumentsAutoChunk, PATH(String, path), HEADER(String, voyageaiHeader, VOYAGEAI_KEY_HEADER), BODY_DTO(Object<ContextualizedEmbeddingDocsRequestBody>, body))
   API_CALL("POST", "{path}", multimodalEmbedDocuments, PATH(String, path), HEADER(String, voyageaiHeader, VOYAGEAI_KEY_HEADER), BODY_DTO(Object<MultimodalEmbeddingRequestBody>, body))
 
 
